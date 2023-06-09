@@ -35,14 +35,15 @@ Heavily inspired by [install-release](https://github.com/Rishang/install-release
 '''
 to do:
 * implement "pre-release" tag?
+* use `repo_info` to sepcify github/gitlab in `Repo().releaseTag()` call
 * replace `getKeys` function?
 '''
 
 # [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables)
 # [XDG Base Directory](https://wiki.archlinux.org/index.php/XDG_Base_Directory)
-XDG_CACHE_HOME = pathlib.Path(f"{os.environ.get('XDG_CACHE_HOME', pathlib.Path.home()/'.cache')}")
-XDG_CONFIG_HOME = pathlib.Path(f"{os.environ.get('XDG_CONFIG_HOME', pathlib.Path.home()/'.config')}")
-XDG_DATA_HOME = pathlib.Path(f"{os.environ.get('XDG_DATA_HOME', pathlib.Path.home()/'.local/share/')}")
+XDG_CACHE_HOME = pathlib.Path(f"{os.getenv('XDG_CACHE_HOME', pathlib.Path.home()/'.cache')}")
+XDG_CONFIG_HOME = pathlib.Path(f"{os.getenv('XDG_CONFIG_HOME', pathlib.Path.home()/'.config')}")
+XDG_DATA_HOME = pathlib.Path(f"{os.getenv('XDG_DATA_HOME', pathlib.Path.home()/'.local/share/')}")
 
 
 @dataclasses.dataclass
@@ -50,8 +51,8 @@ class Config:
     '''Configuration options.'''
 
     log_level: int = logging.INFO
-    github_token: str = f"{os.environ.get('GITHUB_TOKEN', '')}"
-    gitlab_token: str = f"{os.environ.get('GITLAB_TOKEN', '')}"
+    github_token: str = f"{os.getenv('GITHUB_TOKEN', '')}"
+    gitlab_token: str = f"{os.getenv('GITLAB_TOKEN', '')}"
     bin_dir: pathlib.Path = XDG_DATA_HOME.parent/'bin' # symlink destination directory
     cache_dir: pathlib.Path = XDG_CACHE_HOME # download directory
     data_dir: pathlib.Path = XDG_DATA_HOME # extracted data directory
@@ -172,9 +173,17 @@ class Github:
 
     def releaseTag(self, tag: str = 'latest', **kwargs) -> pandas.Series:
         '''Query release tag info for `self.repo_id`.'''
+        if tag in ['pre', 'pre-release', 'prerelease']:
+            return self.preReleaseTag(**kwargs)
         tag = f'tags/{tag}' if tag != 'latest' else tag # [Get a release by tag name](https://docs.github.com/en/rest/releases/releases#get-a-release-by-tag-name)
         response = self.query(url=f'https://api.github.com/repos/{self.repo_id}/releases/{tag}', **kwargs)
         return pandas.Series(response)
+
+    def preReleaseTag(self, **kwargs) -> pandas.Series:
+        '''Query release tag info for `self.repo_id`.'''
+        response = self.query(url=f'https://api.github.com/repos/{self.repo_id}/releases', **kwargs)
+        releases = pandas.DataFrame(response)
+        return releases[releases.prerelease == True].squeeze().rename()
 
 
 @dataclasses.dataclass
@@ -212,6 +221,9 @@ class Repo:
     tag: str = 'latest'
     github: bool = False
     gitlab: bool = False
+    NAME_KEYS: types.MappingProxyType = types.MappingProxyType({'full_name':'name', 'path_with_namespace':'name'})
+    STAR_KEYS: types.MappingProxyType = types.MappingProxyType({'stargazers_count':'stars', 'star_count':'stars'})
+    URL_KEYS: types.MappingProxyType = types.MappingProxyType({'html_url':'url', 'web_url':'url'})
 
     def __post_init__(self):
         self.github = True if 'github.com' in self.id else False
@@ -421,9 +433,11 @@ class Meta:
     '''Write and read metadata for installed utilities.'''
 
     metadata_dir: pathlib.Path = cfg.metadata_dir
-    repo: types.MappingProxyType = types.MappingProxyType({'full_name':'name', 'path_with_namespace':'name', 'description':'description', 'topics':'topics', 'language':'language', 'stargazers_count':'stars', 'star_count':'stars', 'forks_count':'forks', 'html_url':'url', 'web_url':'url', 'updated_at':'updated'})
-    tag: types.MappingProxyType = types.MappingProxyType({'tag_name':'tag', 'published_at':'published', 'released_at':'published'})
-    meta: types.MappingProxyType = types.MappingProxyType({'symlinks':'symlinks', 'installed':'installed'})
+
+    def __post_init__(self):
+        self.repo = {**Repo.NAME_KEYS, **{'description':'description', 'topics':'topics', 'language':'language'}, **Repo.STAR_KEYS, **{'forks_count':'forks'}, **Repo.URL_KEYS, **{'updated_at':'updated'}}
+        self.tag = {'tag_name': 'tag', 'published_at': 'published', 'released_at': 'published'}
+        self.meta ={'symlinks': 'symlinks', 'installed': 'installed'}
 
     def write(self, metadata: typing.Dict[str, typing.Any]):
         '''Write (and overwrite) release metadata.'''
@@ -495,9 +509,9 @@ def config(log_level: typing_extensions.Annotated[str, typer.Option(help=Help.lo
 @app.command()
 def info(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.repo_id)]) -> pandas.Series:
     '''Query repository info.'''
-    keys = {'html_url': 'url', 'web_url': 'url', 'description': 'description', 'topics': 'topics', 'language': 'language', 'created_at': 'created', 'updated_at': 'updated', 'forks_count': 'forks', 'open_issues_count': 'issues', 'archived': 'archived'}
+    keys =  {**Meta().repo, **{'created_at': 'created', 'open_issues_count': 'issues', 'has_downloads': 'downloads', 'visibility': 'visibility', 'archived': 'archived'}}
     repo_info = Repo(id=repo_id).info()
-    table = rich.table.Table(title=repo_id, border_style='blue', show_header=False)
+    table = rich.table.Table(title=repo_info._get(['full_name', 'path_with_namespace']), border_style='blue', show_header=False)
     [table.add_row(key, str(val)) for key, val in repo_info._get(keys).rename(keys).items()]
     if log.level <= logging.INFO:
         rich.console.Console().print(table)
@@ -534,6 +548,7 @@ def install(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     tag_info = pandas.Series({'tag_name': url, 'published_at': None})
     assets = pandas.DataFrame()
     repo_info = info(repo_id=repo_id)
+    repo_id = repo_info._get(Repo.URL_KEYS)
     if not url:
         tag_info = Repo(id=repo_id, tag=tag).releaseTag()
         assets = pandas.DataFrame(tag_info.assets.get('links') if 'links' in tag_info.assets else tag_info.assets)
