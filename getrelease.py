@@ -40,10 +40,6 @@ to do:
 * https://gitlab.com/graphviz/graphviz/-/releases
 '''
 
-rich_handler = rich.logging.RichHandler(rich_tracebacks=True, log_time_format="[%Y-%m-%d %H:%M:%S]")
-logging.basicConfig(level=cfg.log_level, format='%(message)s', handlers=[rich_handler]) # [Logging Handler](https://rich.readthedocs.io/en/stable/logging.html)
-log = logging.getLogger()
-
 # [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables)
 # [XDG Base Directory](https://wiki.archlinux.org/index.php/XDG_Base_Directory)
 XDG_CACHE_HOME = pathlib.Path(f"{os.getenv('XDG_CACHE_HOME', pathlib.Path.home()/'.cache')}")
@@ -84,6 +80,10 @@ class Config:
 
 
 cfg = Config()
+
+rich_handler = rich.logging.RichHandler(rich_tracebacks=True, log_time_format="[%Y-%m-%d %H:%M:%S]")
+logging.basicConfig(level=cfg.log_level, format='%(message)s', handlers=[rich_handler]) # [Logging Handler](https://rich.readthedocs.io/en/stable/logging.html)
+log = logging.getLogger()
 
 
 @dataclasses.dataclass
