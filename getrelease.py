@@ -37,7 +37,6 @@ to do:
 * implement "pre-release" tag?
 * use `repo_info` to specify github/gitlab in `Repo().releaseTag()` call
 * replace `getKeys` function?
-* https://gitlab.com/graphviz/graphviz/-/releases
 '''
 
 # [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables)
@@ -90,15 +89,14 @@ log = logging.getLogger()
 class SYS:
     '''Identify system info and define corresponding regex patterns.'''
 
-    OS: str = platform.system().lower()
+    os: str = platform.system().lower() # [When to use os.name, sys.platform, or platform.system?](https://stackoverflow.com/a/11674977/13019084)
 
-    PLATFORM: str = platform.processor().lower() if platform.processor() else platform.machine().lower() if platform.machine() else ''
+    platform: str = platform.processor().lower() if platform.processor() else platform.machine().lower() if platform.machine() else ''
 
-    ARCH_PATTERN: types.MappingProxyType = types.MappingProxyType({ # https://adamj.eu/tech/2022/01/05/how-to-make-immutable-dict-in-python/
+    arch_pattern_dict: types.MappingProxyType = types.MappingProxyType({ # https://adamj.eu/tech/2022/01/05/how-to-make-immutable-dict-in-python/
             # https://github.com/workhorsy/py-cpuinfo/blob/f3f0fec58335b9699b9b294267c15f516045b1fe/cpuinfo/cpuinfo.py#L782
             # https://github.com/zyedidia/eget/blob/master/DOCS.md#detect
-            # https://en.wikipedia.org/wiki/Uname
-            'X86': 'x86$|x86_32|[i]?[3-6]86|i86pc|ia[-_]?32|bepc',
+            'X86': 'x86$|x86_32|[i]?[3-6]86$|i86pc|ia[-_]?32|bepc',
             'X86_64': 'amd64|x64|x86[-_]?64|i686[-_]?64|ia[-_]?64',
             'ARM8_32': 'armv8[-_]?[b-z]?',
             'ARM8_64': 'aarch64|arm64|armv8[-_]?a', # https://en.wikipedia.org/wiki/ARM_architecture_family#64.2F32-bit_architecture
@@ -115,7 +113,7 @@ class SYS:
             'LOONG_32': 'loongarch32',
             'LOONG_64': 'loongarch64'})
 
-    OS_PATTERN: types.MappingProxyType = types.MappingProxyType({
+    os_pattern_dict: types.MappingProxyType = types.MappingProxyType({
             # https://github.com/zyedidia/eget/blob/master/DOCS.md#detect
             'android': 'android',
             'darwin': 'darwin|mac[.]?os|osx',
@@ -130,17 +128,19 @@ class SYS:
             'win32': 'win|windows'})
 
     def __post_init__(self):
-        if platform.processor() and platform.machine() and (platform.processor().lower() != platform.machine().lower()):
+        if (platform.processor() and platform.machine()) and (platform.processor().lower() != platform.machine().lower()):
             log.warning(f'{platform.processor()=} != {platform.machine()=}')
-        self.os_pattern = self.OS_PATTERN.get(self.OS)
-        arch = [arch for arch, pattern in self.ARCH_PATTERN.items() if re.match(f'{pattern}', self.PLATFORM)]
-        assert len(arch) == 1, f'Processor architecture could not be recognized correctly: {arch}'
-        self.arch_pattern = self.ARCH_PATTERN.get(arch[0])
+        self.os_pattern = self.os_pattern_dict[self.os]
+        arch = [arch for arch, pattern in self.arch_pattern_dict.items() if re.match(pattern=pattern, string=self.platform)]
+        if len(arch) != 1:
+            raise ValueError(f'Processor architecture could not be recognized correctly: {arch}')
+        self.arch_pattern = self.arch_pattern_dict[arch.pop()]
 
-    def uname_wiki(self):
-        '''Check if entries in the `uname` wikipedia table match `self.ARCH_PATTERN`'''
-        uname = pandas.read_html('https://en.wikipedia.org/wiki/Uname', match='Machine')[0]['Machine (-m) POSIX']
-        return [(a, [arch for arch, pattern in self.ARCH_PATTERN.items() if re.match(f'{pattern}', a.lower())]) for a in uname]
+    def test_arch(self):
+        '''Check if entries in the `uname` wikipedia table match `self.arch_pattern`'''
+        # https://en.wikipedia.org/wiki/Uname
+        uname = pandas.read_html('https://en.wikipedia.org/wiki/Uname', match='Machine')[0]['Machine (-m) POSIX'].str.lower().drop_duplicates()
+        return {a: [arch for arch, pattern in self.arch_pattern_dict.items() if re.match(pattern, a)] for a in uname}
 
 
 ARCH_PATTERN = SYS().arch_pattern
