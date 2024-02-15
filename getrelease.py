@@ -35,8 +35,9 @@ Heavily inspired by [install-release](https://github.com/Rishang/install-release
 '''
 to do:
 * implement "pre-release" tag?
-* use `repo_info` to sepcify github/gitlab in `Repo().releaseTag()` call
+* use `repo_info` to specify github/gitlab in `Repo().releaseTag()` call
 * replace `getKeys` function?
+* https://gitlab.com/graphviz/graphviz/-/releases
 '''
 
 # [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables)
@@ -132,14 +133,18 @@ class SYS:
         if platform.processor() and platform.machine() and (platform.processor().lower() != platform.machine().lower()):
             log.warning(f'{platform.processor()=} != {platform.machine()=}')
         self.os_pattern = self.OS_PATTERN.get(self.OS)
-        arch = [arch for arch, match in self.ARCH_PATTERN.items() if re.match(f'{match}', self.PLATFORM)]
+        arch = [arch for arch, pattern in self.ARCH_PATTERN.items() if re.match(f'{pattern}', self.PLATFORM)]
         assert len(arch) == 1, f'Processor architecture could not be recognized correctly: {arch}'
         self.arch_pattern = self.ARCH_PATTERN.get(arch[0])
 
     def uname_wiki(self):
         '''Check if entries in the `uname` wikipedia table match `self.ARCH_PATTERN`'''
         uname = pandas.read_html('https://en.wikipedia.org/wiki/Uname', match='Machine')[0]['Machine (-m) POSIX']
-        return [(a, [arch for arch, match in self.ARCH_PATTERN.items() if re.match(f'{match}', a.lower())]) for a in uname]
+        return [(a, [arch for arch, pattern in self.ARCH_PATTERN.items() if re.match(f'{pattern}', a.lower())]) for a in uname]
+
+
+ARCH_PATTERN = SYS().arch_pattern
+OS_PATTERN = SYS().os_pattern
 
 
 @dataclasses.dataclass
@@ -280,9 +285,9 @@ class Asset:
 
     @classmethod
     def identify(cls, asset_urls: pandas.Series, asset_pattern: re.Pattern = '.*') -> str:
-        '''Return download url for assets corresponding to `os_pattern` and `arch_pattern`. Note that `asset_pattern` has twice the weight as the other criteria.'''
-        os = asset_urls.str.contains(os_pattern, regex=True, case=False).astype(int)
-        arch = asset_urls.str.contains(arch_pattern, regex=True, case=False).astype(int)
+        '''Return download url for assets corresponding to `OS_PATTERN` and `ARCH_PATTERN`. Note that `asset_pattern` has twice the weight as the other criteria.'''
+        os = asset_urls.str.contains(OS_PATTERN, regex=True, case=False).astype(int)
+        arch = asset_urls.str.contains(ARCH_PATTERN, regex=True, case=False).astype(int)
         filetype_veto = asset_urls.str.endswith(('.deb', '.rpm', '.sha1', '.sha256', '.sha256sum', '.sum')).astype(int)
         asset_pattern = asset_urls.str.contains(asset_pattern, regex=True, case=False).astype(int)
         match = os + arch - filetype_veto + 2*asset_pattern
@@ -292,7 +297,7 @@ class Asset:
             log.info(asset)
             return asset[0]
         else:
-            log.error(f'a unique asset URL matching "{os_pattern}" and "{arch_pattern}" could not be identified:\n{asset}\ntry specifying a (regex) `asset_pattern`')
+            log.error(f'a unique asset URL matching "{OS_PATTERN}" and "{ARCH_PATTERN}" could not be identified:\n{asset}\ntry specifying a (regex) `asset_pattern`')
             asset_pattern = input('(regex) asset_pattern: ')
             return cls.identify(asset_urls=asset_urls, asset_pattern=asset_pattern)
 
@@ -417,7 +422,7 @@ class Executables:
         '''Create symlink for executable files, renaming accordingly in case of a single executable file.'''
         if len(self.extracted_bin) == 1:
             extracted_bin = self.extracted_bin[0]
-            contains_system_info = re.findall(pattern=f'{os_pattern}|{arch_pattern}', string=extracted_bin.name.lower())
+            contains_system_info = re.findall(pattern=f'{OS_PATTERN}|{ARCH_PATTERN}', string=extracted_bin.name.lower())
             bin_name = symlink_alias if symlink_alias else self.repo_id.split('/')[-1] if contains_system_info else extracted_bin.name
             self.link(symlink=bin_dir/bin_name, target=extracted_bin)
             symlinks = [bin_dir/bin_name]
@@ -552,8 +557,12 @@ def install(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     if not url:
         tag_info = Repo(id=repo_id, tag=tag).releaseTag()
         assets = pandas.DataFrame(tag_info.assets.get('links') if 'links' in tag_info.assets else tag_info.assets)
-        url = Asset.identify(asset_urls=assets._get(['browser_download_url', 'direct_asset_url']), asset_pattern=asset_pattern)
-    if (not url) or (not confirm and input('Proceed with installation? ').lower() not in ('y', 'yes', 'yep')):
+        if not assets.empty:
+            url = Asset.identify(asset_urls=assets._get(['browser_download_url', 'direct_asset_url']), asset_pattern=asset_pattern)
+    if (not url):
+        log.error('no release assets found! :(')
+        return
+    if (not confirm and input('Proceed with installation? ').lower() not in ('y', 'yes', 'yep')):
         return
     asset_url = url
     filepath = cfg.cache_dir/asset_url.split('/')[-1]
@@ -635,6 +644,9 @@ def getKeys(obj: pandas.Series, keys: typing.Union[str, typing.List[str]], defau
     idx = [k for k in keys if k in obj.index] if isinstance(obj, pandas.Series) else [k for k in keys if k in obj.columns] if isinstance(obj, pandas.DataFrame) else []
     return obj[idx].squeeze() if idx else default_value
 
+pandas.Series._get = getKeys
+pandas.DataFrame._get = getKeys
+
 def parseVersion(version: str) -> packaging.version.Version:
     '''Parse version based on `packaging.version.VERSION_PATTERN`.'''
     pattern = re.compile(pattern=packaging.version.VERSION_PATTERN, flags=(re.VERBOSE|re.IGNORECASE)) # https://packaging.pypa.io/en/stable/version.html#packaging.version.VERSION_PATTERN
@@ -657,12 +669,6 @@ def table(data: pandas.DataFrame, title: str = 'Installed Releases') -> rich.tab
     [table.add_row(*[str(x) for x in val]) for val in data.values]
     return table
 
-pandas.Series._get = getKeys
-pandas.DataFrame._get = getKeys
-
-arch_pattern = SYS().arch_pattern
-os_pattern = SYS().os_pattern
-
 def test():
     import time
     for repo_id in ('aristocratos/btop', 'cli/cli', 'wagoodman/dive', 'helix-editor/helix', 'stedolan/jq', 'johnkerl/miller', 'neovim/neovim', 'koalaman/shellcheck', 'categulario/tiempo-rs', 'natecraddock/zf'):
@@ -670,6 +676,7 @@ def test():
         time.sleep(2)
         # uninstall(repo_id, confirm=True)
     install('moparisthebest/static-curl', symlink_alias='curl', confirm=True)
+    install('exiftool/exiftool', url='https://exiftool.org/Image-ExifTool-12.71.tar.gz', confirm=True)
     install('golang/go', url='https://go.dev/dl/go1.20.4.linux-amd64.tar.gz', confirm=True)
     install('charmbracelet/gum', asset_pattern='tar.gz$', confirm=True)
     # install('ImageMagick/ImageMagick', asset_pattern='gcc', confirm=True)
@@ -677,7 +684,6 @@ def test():
     install('jgm/pandoc', bin_pattern='pandoc$', confirm=True)
     install('stewart/rff', asset_pattern='gnu', confirm=True)
     install('vscodium/vscodium', asset_pattern='VSCodium-linux-x64', bin_pattern='codium', confirm=True)
-
 
 if __name__ == '__main__':
     app()
