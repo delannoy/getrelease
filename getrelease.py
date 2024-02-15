@@ -40,6 +40,10 @@ to do:
 * https://gitlab.com/graphviz/graphviz/-/releases
 '''
 
+rich_handler = rich.logging.RichHandler(rich_tracebacks=True, log_time_format="[%Y-%m-%d %H:%M:%S]")
+logging.basicConfig(level=cfg.log_level, format='%(message)s', handlers=[rich_handler]) # [Logging Handler](https://rich.readthedocs.io/en/stable/logging.html)
+log = logging.getLogger()
+
 # [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables)
 # [XDG Base Directory](https://wiki.archlinux.org/index.php/XDG_Base_Directory)
 XDG_CACHE_HOME = pathlib.Path(f"{os.getenv('XDG_CACHE_HOME', pathlib.Path.home()/'.cache')}")
@@ -52,8 +56,8 @@ class Config:
     '''Configuration options.'''
 
     log_level: int = logging.INFO
-    github_token: str = f"{os.getenv('GITHUB_TOKEN', '')}"
-    gitlab_token: str = f"{os.getenv('GITLAB_TOKEN', '')}"
+    github_token: str = os.getenv('GITHUB_TOKEN', '')
+    gitlab_token: str = os.getenv('GITLAB_TOKEN', '')
     bin_dir: pathlib.Path = XDG_DATA_HOME.parent/'bin' # symlink destination directory
     cache_dir: pathlib.Path = XDG_CACHE_HOME # download directory
     data_dir: pathlib.Path = XDG_DATA_HOME # extracted data directory
@@ -61,7 +65,7 @@ class Config:
 
     def __post_init__(self):
         self.file: pathlib.Path = self.metadata_dir/'config'
-        self.read if self.file.exists() else self.write()
+        self.read() if self.file.exists() else self.write()
 
     def read(self, **kwargs):
         '''Read configuration options from config file and overwrite them with any options provided when instantiating the class.'''
@@ -80,10 +84,6 @@ class Config:
 
 
 cfg = Config()
-
-rich_handler = rich.logging.RichHandler(rich_tracebacks=True, log_time_format="[%Y-%m-%d %H:%M:%S]")
-logging.basicConfig(level=cfg.log_level, format='%(message)s', handlers=[rich_handler]) # [Logging Handler](https://rich.readthedocs.io/en/stable/logging.html)
-log = logging.getLogger()
 
 
 @dataclasses.dataclass
