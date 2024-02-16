@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
 import dataclasses
 import fileinput
 import hashlib
@@ -149,7 +150,7 @@ OS_PATTERN = SYS().os_pattern
 
 @dataclasses.dataclass
 class Github:
-    '''Minimal wrapper for querying the [GitHub REST API](https://docs.github.com/en/rest)'''
+    '''Minimal wrapper for the [GitHub REST API](https://docs.github.com/en/rest).'''
 
     repo_id: str
     token: str = cfg.github_token
@@ -158,7 +159,7 @@ class Github:
         if not self.token:
             log.warning('`GITHUB_TOKEN` environment variable is not set. Setting it will increase the rate limit of GitHub API calls from 60/hr to 5000/hr:\nhttps://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting')
 
-    def query(self, url: str, per_page: int = 100, **kwargs) -> typing.Dict[str, typing.Any]:
+    def query(self, url: str, per_page: int = 100, **kwargs) -> dict[str, typing.Any]:
         '''Query GitHub/GitLab API.'''
         headers = {'Authorization': f'Bearer {self.token}'} # https://docs.github.com/en/rest/guides/getting-started-with-the-rest-api?tool=curl#using-headers # https://docs.gitlab.com/ee/api/rest/#personalprojectgroup-access-tokens
         params = urllib.parse.urlencode({'per_page': per_page, **kwargs})
@@ -193,7 +194,7 @@ class Github:
 
 @dataclasses.dataclass
 class Gitlab(Github):
-    '''Minimal wrapper for querying the [GitLab REST API](https://docs.gitlab.com/ee/api/rest/)'''
+    '''Minimal wrapper for the [GitLab REST API](https://docs.gitlab.com/ee/api/rest/).'''
 
     repo_id: str
     token: str = cfg.gitlab_token
@@ -349,7 +350,7 @@ class Checksum:
 
     assets: pandas.DataFrame
     asset_url: str
-    url_keys: typing.Tuple[str, str] = ('browser_download_url', 'direct_asset_url')
+    url_keys: tuple[str, str] = ('browser_download_url', 'direct_asset_url')
 
     def fromFile(self) -> pathlib.Path:
         '''Parse file containing checksums and return checksum corresponding to `asset_url`.'''
@@ -384,7 +385,7 @@ class Checksum:
 class Executables:
     '''Identify and symlink executable(s) from extracted asset.'''
 
-    extracted_bin: typing.List[pathlib.Path]
+    extracted_bin: list[pathlib.Path]
     repo_id: str
 
     @staticmethod
@@ -393,7 +394,7 @@ class Executables:
         return filepath.is_file() and os.access(filepath, mode=os.X_OK)
 
     @classmethod
-    def identify(cls, extracted_path: pathlib.Path, bin_pattern: re.Pattern = '.*') -> typing.List[pathlib.Path]:
+    def identify(cls, extracted_path: pathlib.Path, bin_pattern: re.Pattern = '.*') -> list[pathlib.Path]:
         '''Identify executable or binary files in `extracted_path`.'''
         if cls.isExecutableFile(extracted_path):
             log.debug(f'{extracted_path = }')
@@ -418,7 +419,7 @@ class Executables:
             log.debug(f'{symlink} -> {target}')
             symlink.symlink_to(target=target)
 
-    def symlink(self, symlink_alias: str = None, bin_dir: pathlib.Path = cfg.bin_dir) -> typing.List[pathlib.Path]:
+    def symlink(self, symlink_alias: str = None, bin_dir: pathlib.Path = cfg.bin_dir) -> list[pathlib.Path]:
         '''Create symlink for executable files, renaming accordingly in case of a single executable file.'''
         if len(self.extracted_bin) == 1:
             extracted_bin = self.extracted_bin[0]
@@ -444,7 +445,7 @@ class Meta:
         self.tag = {'tag_name': 'tag', 'published_at': 'published', 'released_at': 'published'}
         self.meta ={'symlinks': 'symlinks', 'installed': 'installed'}
 
-    def write(self, metadata: typing.Dict[str, typing.Any]):
+    def write(self, metadata: list[str, typing.Any]):
         '''Write (and overwrite) release metadata.'''
         self.metadata_dir.mkdir(exist_ok=True)
         filepath = self.metadata_dir/f"{metadata.get('meta').get('repo_id').replace('/', '_')}.json"
@@ -453,7 +454,7 @@ class Meta:
             json.dump(obj=metadata, fp=out_file)
         log.debug(f'release metadata written to {filepath}')
 
-    def read(self, repo_id: str) -> typing.Dict[str, typing.Any]:
+    def read(self, repo_id: str) -> dict[str, typing.Any]:
         '''Read release metadata.'''
         filepath = self.metadata_dir/f"{repo_id.replace('/', '_')}.json"
         if not filepath.is_file():
@@ -637,7 +638,7 @@ def uninstall(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help
         meta_filepath.unlink(missing_ok=True)
 
 
-def getKeys(obj: pandas.Series, keys: typing.Union[str, typing.List[str]], default_value: typing.Any = None) -> typing.Union[pandas.Series, typing.Any]:
+def getKeys(obj: pandas.Series, keys: str|str[str], default_value: typing.Any = None) -> pandas.Series|typing.Any:
     '''Get existing keys from `pandas.Series` or `pandas.DataFrame`.'''
     # [Pandas .loc without KeyError](https://stackoverflow.com/a/46307319)
     keys = [keys] if isinstance(keys, str) else keys
