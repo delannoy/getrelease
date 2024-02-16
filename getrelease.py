@@ -96,22 +96,22 @@ class SYS:
     arch_pattern_dict: types.MappingProxyType = types.MappingProxyType({ # https://adamj.eu/tech/2022/01/05/how-to-make-immutable-dict-in-python/
             # https://github.com/workhorsy/py-cpuinfo/blob/f3f0fec58335b9699b9b294267c15f516045b1fe/cpuinfo/cpuinfo.py#L782
             # https://github.com/zyedidia/eget/blob/master/DOCS.md#detect
-            'X86': 'x86$|x86_32|[i]?[3-6]86$|i86pc|ia[-_]?32|bepc',
-            'X86_64': 'amd64|x64|x86[-_]?64|i686[-_]?64|ia[-_]?64',
-            'ARM8_32': 'armv8[-_]?[b-z]?',
-            'ARM8_64': 'aarch64|arm64|armv8[-_]?a', # https://en.wikipedia.org/wiki/ARM_architecture_family#64.2F32-bit_architecture
-            'ARM7': 'arm$|armv[6-7]',
-            'PPC_32': 'ppc$|ppc32|prep|pmac|powermac',
-            'PPC_64': 'powerpc|ppc64',
-            'SPARC_32': 'sparc$|sparc32',
-            'SPARC_64': 'sparc64|sun4[u-v]',
-            'S390X': 's390[x]?',
-            'MIPS_32': 'mips$',
-            'MIPS_64': 'mips64',
-            'RISCV_32': 'riscv$|riscv32',
-            'RISCV_64': 'riscv64',
-            'LOONG_32': 'loongarch32',
-            'LOONG_64': 'loongarch64'})
+            'x86': 'x86$|x86_32|[i]?[3-6]86$|i86pc|ia[-_]?32|bepc',
+            'x86_64': 'amd64|x64|x86[-_]?64|i686[-_]?64|ia[-_]?64',
+            'arm8_32': 'armv8[-_]?[b-z]?',
+            'arm8_64': 'aarch64|arm64|armv8[-_]?a', # https://en.wikipedia.org/wiki/arm_architecture_family#64.2f32-bit_architecture
+            'arm7': 'arm$|armv[6-7]',
+            'ppc_32': 'ppc$|ppc32|prep|pmac|powermac',
+            'ppc_64': 'powerpc|ppc64',
+            'sparc_32': 'sparc$|sparc32',
+            'sparc_64': 'sparc64|sun4[u-v]',
+            's390x': 's390[x]?',
+            'mips_32': 'mips$',
+            'mips_64': 'mips64',
+            'riscv_32': 'riscv$|riscv32',
+            'riscv_64': 'riscv64',
+            'loong_32': 'loongarch32',
+            'loong_64': 'loongarch64'})
 
     os_pattern_dict: types.MappingProxyType = types.MappingProxyType({
             # https://github.com/zyedidia/eget/blob/master/DOCS.md#detect
