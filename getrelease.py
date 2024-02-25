@@ -442,7 +442,7 @@ class Meta:
         self.tag = {'tag_name': 'tag', 'published_at': 'published', 'released_at': 'published'}
         self.meta ={'symlinks': 'symlinks', 'installed': 'installed'}
 
-    def write(self, metadata: list[str, typing.Any]):
+    def write(self, metadata: dict[str, typing.Any]):
         '''Write (and overwrite) release metadata.'''
         self.metadata_dir.mkdir(exist_ok=True)
         filepath = self.metadata_dir/f"{metadata.get('meta').get('repo_id').replace('/', '_')}.json"
@@ -548,19 +548,16 @@ def install(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     '''Identify, download, extract asset corresponding to system/OS and symlink executable file(s).'''
     kwargs = locals()
     log.setLevel(logging.ERROR if quiet else logging.DEBUG if verbose else cfg.log_level)
-    tag_info = pandas.Series({'tag_name': url, 'published_at': None})
-    assets = pandas.DataFrame()
+    tag_info, assets = pandas.Series({'tag_name': url}), pandas.DataFrame()
     repo_info = info(repo_id=repo_id)
-    github, gitlab = repo_info.str.lower().str.contains('github').any(), repo_info.str.lower().str.contains('gitlab').any()
-    repo = Repo(id=repo_id, github=github, gitlab=gitlab)
-    repo_id = repo_info._get(Repo.URL_KEYS)
+    repo = Repo(id=repo_info._get(Repo.URL_KEYS))
     if not url:
         tag_info = repo.releaseTag(tag=tag)
         assets = pandas.DataFrame(tag_info.assets.get('links') if 'links' in tag_info.assets else tag_info.assets)
         if not assets.empty:
             url = Asset.identify(asset_urls=assets._get(['browser_download_url', 'direct_asset_url']), asset_pattern=asset_pattern)
     if (not url):
-        log.error('no release assets found! :(')
+        log.error('no release assets found or provided! :(')
         return
     if (not confirm and input('Proceed with installation? ').lower() not in ('y', 'yes', 'yep')):
         return
@@ -573,7 +570,8 @@ def install(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     extracted_path = Asset(filepath=filepath).extract(destination=cfg.data_dir)
     extracted_bin = Executables.identify(extracted_path=extracted_path, bin_pattern=bin_pattern)
     symlinks = Executables(extracted_bin=extracted_bin, repo_id=repo.id).symlink(symlink_alias=symlink_alias)
-    meta = {**kwargs, 'repo_id': repo.id, 'asset_url': asset_url, 'asset': str(filepath), 'extracted_path': str(extracted_path), 'extracted_bin': [str(bin) for bin in extracted_bin], 'symlinks': [str(link) for link in symlinks], 'installed': pandas.Timestamp.now('UTC').strftime('%Y-%m-%dT%H:%M:%SZ')}
+    now = pandas.Timestamp.now('UTC').strftime('%Y-%m-%dT%H:%M:%SZ')
+    meta = {**kwargs, **dict(repo_id=repo.id, asset_url=asset_url, asset=str(filepath), extracted_path=str(extracted_path), extracted_bin=[str(bin) for bin in extracted_bin], symlinks=[str(link) for link in symlinks], installed=now)}
     Meta().write(metadata={'repo': dict(repo_info), 'tag': dict(tag_info), 'meta': meta})
 
 @app.command('update')
@@ -586,10 +584,10 @@ def upgrade(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     log.level = logging.ERROR if quiet else cfg.log_level
     log.level = logging.DEBUG if verbose else cfg.log_level
     repo = Repo(id=repo_id)
-    beggining_of_time = {'published_at': '1970-01-01T00:00:00Z'}
+    beginning_of_time = {'published_at': '1970-01-01T00:00:00Z'}
     metadata = Meta().read(repo_id=repo.id)
     installed_tag = metadata.get('tag', {}).get('tag_name')
-    installed_tag_date = pandas.Timestamp(pandas.Series(metadata.get('tag', beggining_of_time))._get(['published_at', 'released_at']))
+    installed_tag_date = pandas.Timestamp(pandas.Series(metadata.get('tag', beginning_of_time))._get(['published_at', 'released_at']))
     latest_tag = repo.releaseTag(tag='latest')
     latest_tag_date = pandas.Timestamp(latest_tag._get(['published_at', 'released_at']))
     if installed_tag_date >= latest_tag_date:
@@ -675,8 +673,8 @@ def test():
         time.sleep(2)
         # uninstall(repo_id, confirm=True)
     install('moparisthebest/static-curl', symlink_alias='curl', confirm=True)
-    install('exiftool/exiftool', url='https://exiftool.org/Image-ExifTool-12.71.tar.gz', confirm=True)
-    install('golang/go', url='https://go.dev/dl/go1.20.4.linux-amd64.tar.gz', confirm=True)
+    install('exiftool/exiftool', url='https://exiftool.org/Image-ExifTool-12.77.tar.gz', confirm=True)
+    install('golang/go', url='https://go.dev/dl/go1.22.0.linux-amd64.tar.gz', confirm=True)
     install('charmbracelet/gum', asset_pattern='tar.gz$', confirm=True)
     # install('ImageMagick/ImageMagick', asset_pattern='gcc', confirm=True)
     install('https://github.com/jarun/nnn/releases', asset_pattern='nnn-static', symlink_alias='nnn', confirm=True)
