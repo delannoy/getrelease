@@ -35,8 +35,6 @@ Heavily inspired by [install-release](https://github.com/Rishang/install-release
 
 '''
 to do:
-* implement "pre-release" tag?
-* use `repo_info` to specify github/gitlab in `Repo().releaseTag()` call
 * replace `getKeys` function?
 '''
 
@@ -224,7 +222,6 @@ class Repo:
     '''Query GitHub/Gitlab repo info and release tag info.'''
 
     id: str
-    tag: str = 'latest'
     github: bool = False
     gitlab: bool = False
     NAME_KEYS: types.MappingProxyType = types.MappingProxyType({'full_name':'name', 'path_with_namespace':'name'})
@@ -234,20 +231,20 @@ class Repo:
     def __post_init__(self):
         self.github = True if 'github.com' in self.id else False
         self.gitlab = True if 'gitlab.com' in self.id else False
-        self.id = self.parseID(self.id)
+        self.id = self.parseID()
 
-    @staticmethod
-    def parseID(repo_id: str) -> str:
+    def parseID(self) -> str:
         '''Parse owner/org and repo from `repo_id`'''
-        assert '/' in repo_id, 'please provide url or owner/repo separated by a slash, e.g. "https://github.com/junegunn/fzf" or "junegunn/fzf"'
-        if '.com' in repo_id:
-            url = urllib.parse.urlparse(urllib.parse.urljoin('https:', repo_id).replace('///', '//')) # [How to open "partial" links using Python?](https://stackoverflow.com/a/57510472)
-            return str.join('/', url.path.strip('/').split('/')[:2])
+        if '/' not in self.id:
+            raise ValueError('please provide url or owner/repo separated by a slash, e.g. "https://github.com/junegunn/fzf" or "junegunn/fzf"')
+        if '.com' not in self.id:
+            return self.id.strip('/')
         else:
-            return repo_id.strip('/')
+            url = urllib.parse.urlparse(urllib.parse.urljoin('https:', self.id).replace('///', '//')) # [How to open "partial" links using Python?](https://stackoverflow.com/a/57510472)
+            return str.join('/', url.path.strip('/').split('/')[:2])
 
     def info(self) -> pandas.Series:
-        '''Return release tag info for github or gitlab repo.'''
+        '''Return repo info for github or gitlab repo.'''
         func = Github(repo_id=self.id).info if self.github else Gitlab(repo_id=self.id).info if self.gitlab else None
         if func:
             return func()
@@ -256,15 +253,15 @@ class Repo:
         except urllib.error.HTTPError:
             return Gitlab(repo_id=self.id).info()
 
-    def releaseTag(self) -> pandas.Series:
+    def releaseTag(self, tag: str = 'latest') -> pandas.Series:
         '''Return release tag info for github or gitlab repo.'''
         func = Github(repo_id=self.id).releaseTag if self.github else Gitlab(repo_id=self.id).releaseTag if self.gitlab else None
         if func:
-            return func(tag=self.tag, per_page=1)
+            return func(tag=tag, per_page=1)
         try:
-            return Github(repo_id=self.id).releaseTag(tag=self.tag, per_page=1)
+            return Github(repo_id=self.id).releaseTag(tag=tag, per_page=1)
         except urllib.error.HTTPError:
-            return Gitlab(repo_id=self.id).releaseTag(tag=self.tag, per_page=1)
+            return Gitlab(repo_id=self.id).releaseTag(tag=tag, per_page=1)
 
 
 @dataclasses.dataclass
@@ -554,9 +551,11 @@ def install(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     tag_info = pandas.Series({'tag_name': url, 'published_at': None})
     assets = pandas.DataFrame()
     repo_info = info(repo_id=repo_id)
+    github, gitlab = repo_info.str.lower().str.contains('github').any(), repo_info.str.lower().str.contains('github').any()
+    repo = Repo(id=repo_id, github=github, gitlab=gitlab)
     repo_id = repo_info._get(Repo.URL_KEYS)
     if not url:
-        tag_info = Repo(id=repo_id, tag=tag).releaseTag()
+        tag_info = repo.releaseTag(tag=tag)
         assets = pandas.DataFrame(tag_info.assets.get('links') if 'links' in tag_info.assets else tag_info.assets)
         if not assets.empty:
             url = Asset.identify(asset_urls=assets._get(['browser_download_url', 'direct_asset_url']), asset_pattern=asset_pattern)
@@ -573,9 +572,8 @@ def install(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
         return
     extracted_path = Asset(filepath=filepath).extract(destination=cfg.data_dir)
     extracted_bin = Executables.identify(extracted_path=extracted_path, bin_pattern=bin_pattern)
-    repo_id = Repo.parseID(repo_id=repo_id)
-    symlinks = Executables(extracted_bin=extracted_bin, repo_id=repo_id).symlink(symlink_alias=symlink_alias)
-    meta = {**kwargs, 'repo_id': repo_id, 'asset_url': asset_url, 'asset': str(filepath), 'extracted_path': str(extracted_path), 'extracted_bin': [str(bin) for bin in extracted_bin], 'symlinks': [str(link) for link in symlinks], 'installed': pandas.Timestamp.now('UTC').strftime('%Y-%m-%dT%H:%M:%SZ')}
+    symlinks = Executables(extracted_bin=extracted_bin, repo_id=repo.id).symlink(symlink_alias=symlink_alias)
+    meta = {**kwargs, 'repo_id': repo.id, 'asset_url': asset_url, 'asset': str(filepath), 'extracted_path': str(extracted_path), 'extracted_bin': [str(bin) for bin in extracted_bin], 'symlinks': [str(link) for link in symlinks], 'installed': pandas.Timestamp.now('UTC').strftime('%Y-%m-%dT%H:%M:%SZ')}
     Meta().write(metadata={'repo': dict(repo_info), 'tag': dict(tag_info), 'meta': meta})
 
 @app.command('update')
@@ -587,19 +585,19 @@ def upgrade(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     '''Upgrade utility to `latest` release.'''
     log.level = logging.ERROR if quiet else cfg.log_level
     log.level = logging.DEBUG if verbose else cfg.log_level
-    repo_id = Repo.parseID(repo_id=repo_id)
+    repo = Repo(id=repo_id)
     beggining_of_time = {'published_at': '1970-01-01T00:00:00Z'}
-    metadata = Meta().read(repo_id=repo_id)
+    metadata = Meta().read(repo_id=repo.id)
     installed_tag = metadata.get('tag', {}).get('tag_name')
     installed_tag_date = pandas.Timestamp(pandas.Series(metadata.get('tag', beggining_of_time))._get(['published_at', 'released_at']))
-    latest_tag = Repo(id=repo_id, tag='latest').releaseTag()
+    latest_tag = repo.releaseTag(tag='latest')
     latest_tag_date = pandas.Timestamp(latest_tag._get(['published_at', 'released_at']))
     if installed_tag_date >= latest_tag_date:
-        log.info(f"{repo_id} installed tag `{installed_tag}` ({installed_tag_date}) is up to date")
+        log.info(f"{repo.id} installed tag `{installed_tag}` ({installed_tag_date}) is up to date")
     else:
-        log.info(f"updating {repo_id} from `{installed_tag}` ({installed_tag_date}) to `{latest_tag.get('tag_name')}` ({latest_tag_date})")
-        uninstall(repo_id=repo_id, confirm=confirm)
-        metadata = metadata if metadata else {'meta': {'repo_id': repo_id}}
+        log.info(f"updating {repo.id} from `{installed_tag}` ({installed_tag_date}) to `{latest_tag.get('tag_name')}` ({latest_tag_date})")
+        uninstall(repo_id=repo.id, confirm=confirm)
+        metadata = metadata if metadata else {'meta': {'repo_id': repo.id}}
         kwargs = {k: v for k, v in metadata.get('meta').items() if (k in install.__annotations__.keys()) and (k not in ('confirm', 'download_only', 'quiet', 'verbose'))}
         install(**kwargs, confirm=confirm)
 
@@ -625,11 +623,11 @@ def uninstall(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help
     '''Uninstall utility.'''
     log.level = logging.ERROR if quiet else cfg.log_level
     log.level = logging.DEBUG if verbose else cfg.log_level
-    repo_id = Repo.parseID(repo_id=repo_id)
-    metadata = Meta().read(repo_id=repo_id).get('meta')
-    meta_filepath = cfg.metadata_dir/f"{repo_id.replace('/', '_')}.json"
+    repo = Repo(repo_id=repo_id)
+    metadata = Meta().read(repo_id=repo.id).get('meta')
+    meta_filepath = cfg.metadata_dir/f"{repo.id.replace('/', '_')}.json"
     if not metadata:
-        return log.warning(f'Utility `{repo_id}` does not seem to be installed. Please check if metadata file exists in `{meta_filepath}`')
+        return log.warning(f'Utility `{repo.id}` does not seem to be installed. Please check if metadata file exists in `{meta_filepath}`')
     logging.info(f"The following symlinks/files/directories will be deleted:\n{str.join(', ', metadata.get('symlinks'))}\n{metadata.get('asset')}\n{metadata.get('extracted_path')}\n{meta_filepath}")
     if confirm or input('Proceed with uninstallation? ').lower() in ('y', 'yes', 'yep'):
         _ = [rm_recursive(path=pathlib.Path(path)) for path in metadata.get('symlinks')]
