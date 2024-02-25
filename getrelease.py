@@ -551,7 +551,7 @@ def install(repo_id: typing_extensions.Annotated[str, typer.Argument(help=Help.r
     tag_info = pandas.Series({'tag_name': url, 'published_at': None})
     assets = pandas.DataFrame()
     repo_info = info(repo_id=repo_id)
-    github, gitlab = repo_info.str.lower().str.contains('github').any(), repo_info.str.lower().str.contains('github').any()
+    github, gitlab = repo_info.str.lower().str.contains('github').any(), repo_info.str.lower().str.contains('gitlab').any()
     repo = Repo(id=repo_id, github=github, gitlab=gitlab)
     repo_id = repo_info._get(Repo.URL_KEYS)
     if not url:
