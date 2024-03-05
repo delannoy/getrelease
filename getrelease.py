@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import base64
 import dataclasses
 import fileinput
 import hashlib
@@ -155,6 +156,15 @@ class Github:
     def __post_init__(self):
         if not self.token:
             log.warning('`GITHUB_TOKEN` environment variable is not set. Setting it will increase the rate limit of GitHub API calls from 60/hr to 5000/hr:\nhttps://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting')
+
+    @staticmethod
+    def checkRateLimit() -> typing.Dict[str, int]:
+        '''Query GitHub API rate limit.''' # [Increasing the unauthenticated rate limit for OAuth Apps](https://docs.github.com/en/rest/overview/resources-in-the-rest-api#increasing-the-unauthenticated-rate-limit-for-oauth-apps)
+        user = os.popen('git config --get user.github').read().strip()
+        auth = base64.b64encode(bytes(f'{user}:{TOKEN}', encoding='ascii')).decode("utf-8") # [How to use urllib with username/password authentication in python 3?](https://stackoverflow.com/a/24648149)
+        request = urllib.request.Request(url='https://api.github.com/rate_limit', headers={'Authorization': f'Basic {auth}'})
+        response = json.loads(urllib.request.urlopen(request).read())
+        return response.get('rate')
 
     def query(self, url: str, per_page: int = 100, **kwargs) -> typing.Dict[str, typing.Any]:
         '''Query GitHub/GitLab API.'''
