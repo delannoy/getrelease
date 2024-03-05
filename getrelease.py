@@ -15,6 +15,7 @@ import typing
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 import packaging.version
 import pandas
@@ -29,6 +30,17 @@ import typing_extensions
 '''
 Package manager for pre-compiled/pre-built github or gitlab releases.
 Heavily inspired by [install-release](https://github.com/Rishang/install-release) and [eget](https://github.com/zyedidia/eget).
+'''
+
+'''
+to do:
+* extract and install from local asset
+* eget
+    --source         download the source code for the target repo instead of a release
+    --verify-sha256= verify the downloaded asset checksum against the one provided
+    --rate           show GitHub API rate limiting information
+    --to=            move to given location after extracting
+    --system=        target system to download for (use "all" for all choices)
 '''
 
 # [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables)
@@ -216,14 +228,11 @@ class Repo:
         self.id = self.parseID()
 
     def parseID(self) -> str:
-        '''Parse owner/org and repo from `repo_id`'''
-        if '/' not in self.id:
-            raise ValueError("please provide url or owner/repo separated by a slash, e.g. 'https://github.com/junegunn/fzf' or 'junegunn/fzf'")
-        if '.com' not in self.id:
-            return self.id.strip('/')
-        else:
-            url = urllib.parse.urlparse(urllib.parse.urljoin('https:', self.id).replace('///', '//')) # [How to open "partial" links using Python?](https://stackoverflow.com/a/57510472)
-            return str.join('/', url.path.strip('/').split('/')[:2])
+        '''Parse org and repo from `repo_id`'''
+        match = re.match(pattern='(?:https?://)?(?:git[hl][au]b.com)?/?(\w+/\w+)', string=self.id)
+        if not match:
+            raise ValueError("please provide github.com/gitlab.com repo url or organization & repo separated by a slash, e.g. 'https://github.com/junegunn/fzf' or 'junegunn/fzf'")
+        return match.group(1)
 
     def info(self) -> pandas.Series:
         '''Return repo info for github or gitlab repo.'''
@@ -309,16 +318,54 @@ class Asset:
 
     def extract(self, destination: pathlib.Path = cfg.data_dir) -> pathlib.Path:
         '''Extract `self.file_path` to `destination`.'''
-        if not tarfile.is_tarfile(self.file_path):
-            log.info(f'{self.file_path} is not a tar archive')
-            self.chmodExecutable(file_path=self.file_path)
-            return self.file_path.rename(destination/self.file_path.stem)
+        if tarfile.is_tarfile(self.file_path):
+            return self.extractTAR(destination=destination)
+        if zipfile.is_zipfile(self.file_path):
+            return self.extractZIP(destination=destination)
+        log.warning(f'{self.file_path} is not a tar or zip archive; it is assumed that the asset itself is a binary') # e.g. https://github.com/jqlang/jq/releases
+        self.chmodExecutable(file_path=self.file_path)
+        return self.file_path.rename(destination/self.file_path.stem)
+
+    def extractTAR(self, destination: pathlib.Path = cfg.data_dir) -> pathlib.Path:
         with tarfile.open(name=self.file_path, mode='r:*') as tar:
             base_dir = os.path.commonpath(tar.getnames()) # [With Python's 'tarfile', how can I get the top-most directory in a tar archive?](https://stackoverflow.com/a/11269228)
-            log.info(f'extracting {self.file_path}...')
-            tar.extractall(path=destination if base_dir else destination/self.file_path.stem.rstrip('.tar'))
-        extracted_dir = destination/base_dir if base_dir else destination/self.file_path.stem.rstrip('.tar')
-        log.debug(f'extracted {self.file_path} to {extracted_dir}')
+            extracted_dir = destination/base_dir
+            if not base_dir:
+                # extract into `base_dir` if there is no common top-most directory inside the archive
+                base_dir = self.file_path.stem.rstrip('.tar')
+                destination = destination/base_dir
+                extracted_dir = destination
+            log.info(f'extracting {self.file_path} ...')
+            tar.extractall(path=destination)
+        log.info(f'extracted {self.file_path} to {extracted_dir}')
+        return extracted_dir
+
+    @staticmethod
+    def zipfile_extract_all_preserve_permissions(zip: zipfile.ZipFile, destination: pathlib.Path):
+        '''Patch for stupid `zipfile.ZipFile.extractall` to preserve file permissions'''
+        # [Zipfile in Python file permission](https://stackoverflow.com/a/46837272/13019084)
+        # [Python zipfile removes execute permissions from binaries](https://stackoverflow.com/a/39296577/13019084)
+        for info in zip.infolist():
+            extracted_path = zip.extract(member=info, path=destination)
+            if not info.create_system == 3: # ZIP_UNIX_SYSTEM = 3
+                continue
+            unix_attributes = info.external_attr >> 16
+            if not unix_attributes:
+                continue
+            pathlib.Path(extracted_path).chmod(mode=unix_attributes)
+
+    def extractZIP(self, destination: pathlib.Path = cfg.data_dir) -> pathlib.Path:
+        with zipfile.ZipFile(self.file_path, mode='r') as zip:
+            base_dir = os.path.commonpath(zip.namelist()) # [With Python's 'tarfile', how can I get the top-most directory in a tar archive?](https://stackoverflow.com/a/11269228)
+            extracted_dir = destination/base_dir
+            if not base_dir:
+                # extract into `base_dir` if there is no common top-most directory inside the archive
+                base_dir = self.file_path.stem.rstrip('.tar')
+                destination = destination/base_dir
+                extracted_dir = destination
+            log.info(f'extracting {self.file_path} ...')
+            self.zipfile_extract_all_preserve_permissions(zip=zip, destination=destination) # zip.extractall(path=destination)
+        log.info(f'extracted {self.file_path} to {extracted_dir}')
         return extracted_dir
 
 
@@ -713,55 +760,58 @@ def rmRecursive(path: pathlib.Path):
         path.rmdir()
     log.debug(f'removed {path}')
 
-def test():
-    import time
-    go = {'wagoodman/dive': {},
-          'wader/fq': {},
-          'antonmedv/fx': {},
-          'junegunn/fzf': {},
-          'dundee/gdu': dict(asset_pattern='linux_amd64.tgz'),
-          'tomnomnom/gron': {},
-          'charmbracelet/gum': dict(asset_pattern='tar.gz$'),
-          'jesseduffield/lazygit': {},
-          'gokcehan/lf': {},
-          'zyedidia/micro': dict(asset_pattern='linux64.tar.gz'),
-          'solarkennedy/uq': {},
-          'mikefarah/yq': dict(asset_pattern='amd64$')}
-    rust = {'sharkdp/bat': dict(asset_pattern='linux-gnu.tar.gz'),
-            'ClementTsang/bottom': dict(tag='prerelease', asset_pattern='linux-gnu.tar.gz'),
-            'bootandy/dust': dict(asset_pattern='linux-gnu.tar.gz'),
-            'eza-community/eza': dict(asset_pattern='linux-gnu.tar.gz'),
-            'sharkdp/fd': dict(asset_pattern='linux-gnu.tar.gz'),
-            'sharkdp/hyperfine': dict(asset_pattern='linux-gnu.tar.gz'),
-            'stewart/rff': dict(asset_pattern='linux-gnu.tar.gz'),
-            'BurntSushi/ripgrep': {},
-            'starship/starship': dict(asset_pattern='linux-gnu.tar.gz'),
-            'categulario/tiempo-rs': {},
-            'typst/typst': {},
-            'atanunq/viu': {},
-            'BurntSushi/xsv': {},
-            'ajeetdsouza/zoxide': {}}
+def installAll():
+    go = {
+        'cli/cli': {},
+        'wagoodman/dive': {},
+        'wader/fq': {},
+        'antonmedv/fx': {},
+        'junegunn/fzf': {},
+        'dundee/gdu': dict(asset_pattern='linux_amd64.tgz'),
+        'tomnomnom/gron': {},
+        'charmbracelet/gum': dict(asset_pattern='tar.gz$'),
+        'jesseduffield/lazygit': {},
+        'gokcehan/lf': {},
+        'zyedidia/micro': dict(asset_pattern='linux64.tar.gz'),
+        'johnkerl/miller': {},
+        'ericchiang/pup': {},
+        'rclone/rclone': {},
+        'solarkennedy/uq': {},
+        'mikefarah/yq': dict(asset_pattern='amd64$')}
+    rust = {
+        'sharkdp/bat': dict(asset_pattern='linux-gnu.tar.gz'),
+        'ClementTsang/bottom': dict(tag='prerelease', asset_pattern='linux-gnu.tar.gz'),
+        'Canop/broot': {},
+        'bootandy/dust': dict(asset_pattern='linux-gnu.tar.gz'),
+        'eza-community/eza': dict(asset_pattern='linux-gnu.tar.gz'),
+        'sharkdp/fd': dict(asset_pattern='linux-gnu.tar.gz'),
+        'helix-editor/helix': {},
+        'sharkdp/hyperfine': dict(asset_pattern='linux-gnu.tar.gz'),
+        'stewart/rff': dict(asset_pattern='linux-gnu.tar.gz'),
+        'BurntSushi/ripgrep': {},
+        'starship/starship': dict(asset_pattern='linux-gnu.tar.gz'),
+        'categulario/tiempo-rs': {},
+        'typst/typst': {},
+        'atanunq/viu': {},
+        'BurntSushi/xsv': {},
+        'ajeetdsouza/zoxide': {}}
     other = {'aristocratos/btop': {},
-             'cli/cli': {},
-             'moparisthebest/static-curl': dict(symlink_alias='curl'),
-             'helix-editor/helix': {},
-             'ImageMagick/ImageMagick': dict(asset_pattern='gcc'),
-             'jqlang/jq': dict(asset_pattern='linux64'),
-             'johnkerl/miller': {},
-             'neovim/neovim': dict(tag='prerelease'),
-             'jarun/nnn': dict(asset_pattern='nnn-static', symlink_alias='nnn'),
-             'jgm/pandoc': dict(bin_pattern='pandoc$'),
-             'quarto-dev/quarto-cli': dict(asset_pattern='linux-amd64', tag='prerelease'),
-             'koalaman/shellcheck': {},
-             'vscodium/vscodium': dict(asset_pattern='VSCodium-linux-x64', bin_pattern='codium'),
-             'natecraddock/zf': {}}
-    from_url = {'exiftool/exiftool': dict(url='https://exiftool.org/Image-ExifTool-12.77.tar.gz'),
-                'golang/go': dict(url='https://go.dev/dl/go1.22.0.linux-amd64.tar.gz'),
-                'rofl0r/ncdu': dict(url='https://dev.yorhel.nl/download/ncdu-2.3-linux-x86_64.tar.gz')}
+        'moparisthebest/static-curl': dict(symlink_alias='curl'),
+        'ImageMagick/ImageMagick': dict(asset_pattern='gcc'),
+        'jqlang/jq': dict(asset_pattern='linux64'),
+        'neovim/neovim': dict(tag='prerelease'),
+        'jarun/nnn': dict(asset_pattern='nnn-static', symlink_alias='nnn'),
+        'jgm/pandoc': dict(bin_pattern='pandoc$'),
+        'quarto-dev/quarto-cli': dict(asset_pattern='linux-amd64', tag='prerelease'),
+        'koalaman/shellcheck': {},
+        'vscodium/vscodium': dict(asset_pattern='VSCodium-linux-x64', bin_pattern='codium'),
+        'natecraddock/zf': {}}
+    from_url = {
+        'exiftool/exiftool': dict(url='https://exiftool.org/Image-ExifTool-12.77.tar.gz'),
+        'golang/go': dict(url='https://go.dev/dl/go1.22.0.linux-amd64.tar.gz'),
+        'rofl0r/ncdu': dict(url='https://dev.yorhel.nl/download/ncdu-2.3-linux-x86_64.tar.gz')}
     for repo_id, kwargs in {**go, **rust, **other, **from_url}.items():
-        _ = kwargs.pop('tag', None)
-        install(repo_id, **kwargs, tag='prerelease')
-        # uninstall(repo_id)
+        install(repo_id, **kwargs)
 
 ARCH_PATTERN = SYS().arch_pattern
 OS_PATTERN = SYS().os_pattern
