@@ -39,7 +39,6 @@ to do:
 * eget
     --source         download the source code for the target repo instead of a release
     --verify-sha256= verify the downloaded asset checksum against the one provided
-    --rate           show GitHub API rate limiting information
     --to=            move to given location after extracting
     --system=        target system to download for (use "all" for all choices)
 '''
@@ -157,11 +156,10 @@ class Github:
         if not self.token:
             log.warning('`GITHUB_TOKEN` environment variable is not set. Setting it will increase the rate limit of GitHub API calls from 60/hr to 5000/hr:\nhttps://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting')
 
-    @staticmethod
-    def checkRateLimit() -> typing.Dict[str, int]:
+    @classmethod
+    def checkRateLimit(cls) -> typing.Dict[str, int]:
         '''Query GitHub API rate limit.''' # [Increasing the unauthenticated rate limit for OAuth Apps](https://docs.github.com/en/rest/overview/resources-in-the-rest-api#increasing-the-unauthenticated-rate-limit-for-oauth-apps)
-        user = os.popen('git config --get user.github').read().strip()
-        auth = base64.b64encode(bytes(f'{user}:{TOKEN}', encoding='ascii')).decode("utf-8") # [How to use urllib with username/password authentication in python 3?](https://stackoverflow.com/a/24648149)
+        auth = base64.b64encode(bytes(f'{cls.token}', encoding='ascii')).decode("utf-8") # [How to use urllib with username/password authentication in python 3?](https://stackoverflow.com/a/24648149)
         request = urllib.request.Request(url='https://api.github.com/rate_limit', headers={'Authorization': f'Basic {auth}'})
         response = json.loads(urllib.request.urlopen(request).read())
         return response.get('rate')
@@ -519,6 +517,7 @@ class Help:
     log_level = f"log level {[l.lower() for l in logging._nameToLevel if l != 'NOTSET']}"
     github_token = 'token to increase the rate limit of GitHub API calls (can also be set as an environment variable: `GITHUB_TOKEN`)'
     gitlab_token = 'token to increase the rate limit of GitLab API calls (can also be set as an environment variable: `GITLAB_TOKEN`)'
+    github_rate_limit = 'query rate limit for provided `github_token`'
     bin_dir = 'symlink destination directory'
     cache_dir = 'download directory'
     data_dir = 'extracted data directory'
@@ -548,6 +547,8 @@ class Typer:
     cache_dir = typing_extensions.Annotated[str, typer.Option(help=Help.cache_dir)]
     data_dir = typing_extensions.Annotated[str, typer.Option(help=Help.data_dir)]
     metadata_dir = typing_extensions.Annotated[str, typer.Option(help=Help.metadata_dir)]
+
+    github_rate_limit = typing_extensions.Annotated[bool, typer.Option('--github-rate', help=Help.github_rate_limit)]
 
     repo_id = typing_extensions.Annotated[str, typer.Argument(help=Help.repo_id)] # = typer.Argument(help=Help.repo_id)
     tag = typing_extensions.Annotated[str, typer.Option('--tag', '-t', help=Help.tag)]
@@ -581,7 +582,7 @@ def config(log_level: Typer.log_level = logging.getLevelName(Config.log_level).l
 
 
 @app.command()
-def info(repo_id: Typer.repo_id) -> pandas.Series:
+def info(repo_id: Typer.repo_id, github_rate_limit: Typer.github_rate_limit) -> pandas.Series:
     '''Query repository info.'''
     keys =  {**Meta().repo, **dict(created_at='created', open_issues_count='issues', has_downloads='downloads', visibility='visibility', archived='archived')}
     try:
@@ -594,6 +595,8 @@ def info(repo_id: Typer.repo_id) -> pandas.Series:
     [table.add_row(key, str(val)) for key, val in repo_info[repo_info.index.intersection(keys)].rename(keys).items()]
     if log.level <= logging.INFO:
         rich.console.Console().print(table)
+    if github_rate_limit:
+        log.info(f'github rate limit info: {Github.checkRateLimit()}')
     return repo_info
 
 
