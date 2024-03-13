@@ -155,6 +155,7 @@ class Github:
     def __post_init__(self):
         if not self.token:
             log.warning('`GITHUB_TOKEN` environment variable is not set. Setting it will increase the rate limit of GitHub API calls from 60/hr to 5000/hr:\nhttps://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting')
+            log.info(f'github rate limit info: {Github.checkRateLimit()}')
 
     @classmethod
     def checkRateLimit(cls) -> typing.Dict[str, int]:
@@ -517,7 +518,6 @@ class Help:
     log_level = f"log level {[l.lower() for l in logging._nameToLevel if l != 'NOTSET']}"
     github_token = 'token to increase the rate limit of GitHub API calls (can also be set as an environment variable: `GITHUB_TOKEN`)'
     gitlab_token = 'token to increase the rate limit of GitLab API calls (can also be set as an environment variable: `GITLAB_TOKEN`)'
-    github_rate_limit = 'query rate limit for provided `github_token`'
     bin_dir = 'symlink destination directory'
     cache_dir = 'download directory'
     data_dir = 'extracted data directory'
@@ -547,8 +547,6 @@ class Typer:
     cache_dir = typing_extensions.Annotated[str, typer.Option(help=Help.cache_dir)]
     data_dir = typing_extensions.Annotated[str, typer.Option(help=Help.data_dir)]
     metadata_dir = typing_extensions.Annotated[str, typer.Option(help=Help.metadata_dir)]
-
-    github_rate_limit = typing_extensions.Annotated[bool, typer.Option('--github-rate', help=Help.github_rate_limit)]
 
     repo_id = typing_extensions.Annotated[str, typer.Argument(help=Help.repo_id)] # = typer.Argument(help=Help.repo_id)
     tag = typing_extensions.Annotated[str, typer.Option('--tag', '-t', help=Help.tag)]
@@ -582,7 +580,7 @@ def config(log_level: Typer.log_level = logging.getLevelName(Config.log_level).l
 
 
 @app.command()
-def info(repo_id: Typer.repo_id, github_rate_limit: Typer.github_rate_limit) -> pandas.Series:
+def info(repo_id: Typer.repo_id) -> pandas.Series:
     '''Query repository info.'''
     keys =  {**Meta().repo, **dict(created_at='created', open_issues_count='issues', has_downloads='downloads', visibility='visibility', archived='archived')}
     try:
@@ -594,9 +592,7 @@ def info(repo_id: Typer.repo_id, github_rate_limit: Typer.github_rate_limit) -> 
     table = rich.table.Table(title=title, border_style='blue', show_header=False)
     [table.add_row(key, str(val)) for key, val in repo_info[repo_info.index.intersection(keys)].rename(keys).items()]
     if log.level <= logging.INFO:
-        rich.console.Console().print(table)
-    if github_rate_limit:
-        log.info(f'github rate limit info: {Github.checkRateLimit()}')
+        RICH_CONSOLE.print(table)
     return repo_info
 
 
@@ -615,7 +611,7 @@ def ls():
     repo['topics'] = repo.topics.str[0:3]
     repo[['updated', 'published', 'installed']] = repo[['updated', 'published', 'installed']].apply(pandas.to_datetime, format='ISO8601').apply(lambda row: row.dt.strftime('%Y-%m-%d'))
     repo = repo.sort_values(by='name', key=lambda x: x.str.split('/', expand=True)[1]).reset_index(drop=True)
-    rich.console.Console().print(table(data=repo))
+    RICH_CONSOLE.print(table(data=repo))
 
 
 @app.command()
@@ -828,6 +824,7 @@ def installAll():
 
 ARCH_PATTERN = SYS().arch_pattern
 OS_PATTERN = SYS().os_pattern
+RICH_CONSOLE = rich.console.Console()
 
 if __name__ == '__main__':
     app()
