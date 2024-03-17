@@ -24,6 +24,7 @@ import rich.color
 import rich.console
 import rich.logging
 import rich.progress
+import rich.prompt
 import rich.table
 import typer
 import typing_extensions
@@ -49,31 +50,49 @@ XDG_CACHE_HOME = pathlib.Path(f"{os.getenv('XDG_CACHE_HOME', pathlib.Path.home()
 XDG_CONFIG_HOME = pathlib.Path(f"{os.getenv('XDG_CONFIG_HOME', pathlib.Path.home()/'.config')}")
 XDG_DATA_HOME = pathlib.Path(f"{os.getenv('XDG_DATA_HOME', pathlib.Path.home()/'.local/share/')}")
 
+DEFAULT_CONFIG = dict(log_level=logging.INFO,
+    github_token=os.getenv('GITHUB_TOKEN', ''),
+    gitlab_token=os.getenv('GITLAB_TOKEN', ''),
+    bin_dir=XDG_DATA_HOME.parent/'bin',
+    cache_dir=XDG_CACHE_HOME,
+    data_dir=XDG_DATA_HOME,
+    metadata_dir=XDG_CONFIG_HOME/f'{pathlib.Path(__file__).stem}',
+)
+
 
 @dataclasses.dataclass
 class Config:
     '''Configuration options.'''
 
-    log_level: int = logging.INFO # logging.INFO == 20
-    github_token: str = os.getenv('GITHUB_TOKEN', '')
-    gitlab_token: str = os.getenv('GITLAB_TOKEN', '')
-    bin_dir: pathlib.Path = XDG_DATA_HOME.parent/'bin' # symlink destination directory
-    cache_dir: pathlib.Path = XDG_CACHE_HOME # download directory
-    data_dir: pathlib.Path = XDG_DATA_HOME # extracted data directory
-    metadata_dir: pathlib.Path = XDG_CONFIG_HOME/f'{pathlib.Path(__file__).stem}' # installed releases metadata directory
+    log_level: int = None
+    github_token: str = None
+    gitlab_token: str = None
+    bin_dir: pathlib.Path = None # symlink destination directory
+    cache_dir: pathlib.Path = None # download directory
+    data_dir: pathlib.Path = None # extracted data directory
+    metadata_dir: pathlib.Path = DEFAULT_CONFIG['metadata_dir'] # metadata directory
+
+    def init(self, **kwargs):
+        '''Instantiate from a dict.'''
+        _ = {setattr(self, k, v) for k, v in kwargs.items() if v} # [Creating class instance properties from a dictionary?](https://stackoverflow.com/a/1639197)
 
     def __post_init__(self):
+        config = DEFAULT_CONFIG.copy()
         self.file: pathlib.Path = self.metadata_dir/'config'
-        self.read() if self.file.exists() else self.write()
+        if self.file.exists():
+            config.update(self.read_config_file())
+        instantiated_attributes = {k: v for k, v in dataclasses.asdict(self).items() if v}
+        config.update(instantiated_attributes)
+        self.init(**config)
+        self.write()
+        return
 
-    def read(self, **kwargs):
+    def read_config_file(self, **kwargs):
         '''Read configuration options from config file and overwrite them with any options provided when instantiating the class.'''
         with self.file.open(mode='r') as config_file:
             config = json.load(fp=config_file)
-        instantiated_attributes = {f.name: getattr(self, f.name) for f in dataclasses.fields(self) if (getattr(self, f.name) != f.default) or (getattr(self, f.name) != config[f.name])} # instantiated attributes that differ from default attributes or from config file
-        config.update(instantiated_attributes) # update attributes read from config file with instantiated attributes
         config.update({k: pathlib.Path(v) for k, v in config.items() if k.endswith('_dir')}) # convert paths to `pathlib.Path` objects
-        _ = {setattr(self, k, v) for k, v in config.items()} # [Creating class instance properties from a dictionary?](https://stackoverflow.com/a/1639197)
+        return config
 
     def write(self):
         '''Write configuration options to config file.'''
@@ -133,7 +152,7 @@ class SYS:
             'windows': 'win|windows',
             'win32': 'win|windows'}
         if (platform.processor() and platform.machine()) and (platform.processor().lower() != platform.machine().lower()):
-            log.warning(f'{platform.processor()=} != {platform.machine()=}')
+            log.warning(f"platform.processor ('{platform.processor()}') != platform.machine '{platform.machine()}')")
         self.os_pattern = self.os_pattern_dict[self.os]
         arch = [arch for arch, pattern in self.arch_pattern_dict.items() if re.match(pattern=pattern, string=self.platform)]
         if len(arch) != 1:
@@ -156,13 +175,13 @@ class Github:
 
     def __post_init__(self):
         if not self.token:
-            log.warning('`GITHUB_TOKEN` environment variable is not set. Setting it will increase the rate limit of GitHub API calls from 60/hr to 5000/hr:\nhttps://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting')
+            log.warning("'GITHUB_TOKEN' environment variable is not set. Setting it will increase the rate limit of GitHub API calls from 60/hr to 5000/hr:\nhttps://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting")
             log.info(f'github rate limit info: {Github.checkRateLimit()}')
 
     @classmethod
     def checkRateLimit(cls) -> typing.Dict[str, int]:
         '''Query GitHub API rate limit.''' # [Increasing the unauthenticated rate limit for OAuth Apps](https://docs.github.com/en/rest/overview/resources-in-the-rest-api#increasing-the-unauthenticated-rate-limit-for-oauth-apps)
-        auth = base64.b64encode(bytes(f'{cls.token}', encoding='ascii')).decode("utf-8") # [How to use urllib with username/password authentication in python 3?](https://stackoverflow.com/a/24648149)
+        auth = base64.b64encode(bytes(cls.token, encoding='ascii')).decode("utf-8") # [How to use urllib with username/password authentication in python 3?](https://stackoverflow.com/a/24648149)
         request = urllib.request.Request(url='https://api.github.com/rate_limit', headers={'Authorization': f'Basic {auth}'})
         response = json.loads(urllib.request.urlopen(request).read())
         return response.get('rate')
@@ -208,7 +227,7 @@ class Gitlab(Github):
     def __post_init__(self):
         self.repo_id = self.repo_id.replace('/', '%2F') # [Get the `id` of gitlab project via gitlab api or gitlab-cli](https://stackoverflow.com/a/54824458)
         if not self.token:
-            log.warning('`GITLAB_TOKEN` environment variable not set. Some API responses will return only limited fields. Setting it will increase the rate limit of GitLab API calls.\nhttps://docs.gitlab.com/ee/api/projects.html#list-all-projects\nhttps://docs.gitlab.com/ee/user/gitlab_com/index.html#gitlabcom-specific-rate-limits')
+            log.warning("'GITLAB_TOKEN' environment variable not set. Some API responses will return only limited fields. Setting it will increase the rate limit of GitLab API calls.\nhttps://docs.gitlab.com/ee/api/projects.html#list-all-projects\nhttps://docs.gitlab.com/ee/user/gitlab_com/index.html#gitlabcom-specific-rate-limits")
 
     def info(self) -> pandas.Series:
         '''Query repo info for `self.repo_id`.''' # [Get single project](https://docs.gitlab.com/ee/api/projects.html#get-single-project)
@@ -288,14 +307,14 @@ class Asset:
         filetype_veto = asset_urls.str.endswith(('.deb', '.rpm', '.sha1', '.sha256', '.sha256sum', '.sum')).astype(int)
         asset_pattern = asset_urls.str.contains(asset_pattern, regex=True, case=False).astype(int)
         match = os + arch - filetype_veto + 2*asset_pattern
-        asset = asset_urls[match == match.max()].to_list()
-        log.debug(f'{asset = }')
-        if len(asset) == 1:
-            log.info(asset)
-            return asset[0]
+        assets = asset_urls[match == match.max()].to_list()
+        log.debug(f'{assets = }')
+        if len(assets) == 1:
+            log.info(assets)
+            return assets[0]
         else:
-            log.warning(f'a unique asset URL matching "{OS_PATTERN}" and "{ARCH_PATTERN}" could not be identified:\n{asset}\ntry specifying a (regex) `asset_pattern`')
-            asset_pattern = input('(regex) asset_pattern: ')
+            log.warning(f"a unique asset URL matching '{OS_PATTERN}' and '{ARCH_PATTERN}' could not be identified:\n{assets}\ntry specifying a (regex) 'asset_pattern'")
+            asset_pattern = rich.prompt.Prompt.ask('(regex) asset_pattern')
             return cls.identify(asset_urls=asset_urls, asset_pattern=asset_pattern)
 
     def download(self, url: str, force: bool = False):
@@ -304,14 +323,13 @@ class Asset:
         progress_columns = [v for k,v in dataclasses.asdict(self).items() if k.startswith('col_')] # [rich.progress.Progress](https://rich.readthedocs.io/en/stable/reference/progress.html#rich.progress.Progress)
         progress = rich.progress.Progress(*progress_columns)
         task_id = progress.add_task(description="download", start=False, url=url, filename=self.file_path)
-        log.debug(f'requesting {url}')
+        log.debug(f'{url = }')
         response = urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': os.environ['USERAGENT']}))
         if self.file_path.exists():
             local_file_size, remote_file_size = self.file_path.stat().st_size, int(response.length)
-            log.debug(f'{self.file_path} size = {local_file_size}\n{url} size = {remote_file_size}')
-            log.info(f'local file size == remote file size: {local_file_size == remote_file_size}')
+            log.debug(f"'{self.file_path}': {local_file_size} bytes\n'{url}': {remote_file_size} bytes")
         if self.file_path.exists() and (local_file_size == remote_file_size) and (not force):
-            return log.info(f'{self.file_path} already exists')
+            return log.warning(f'{self.file_path} already exists')
         progress.update(task_id=task_id, total=float(response.length))
         with progress:
             with self.file_path.open(mode='wb') as out_file:
@@ -338,17 +356,17 @@ class Asset:
         return self.file_path.rename(destination/self.file_path.stem)
 
     def extractTAR(self, destination: pathlib.Path = cfg.data_dir) -> pathlib.Path:
-        with tarfile.open(name=self.file_path, mode='r:*') as tar:
-            base_dir = os.path.commonpath(tar.getnames()) # [With Python's 'tarfile', how can I get the top-most directory in a tar archive?](https://stackoverflow.com/a/11269228)
-            extracted_dir = destination/base_dir
-            if not base_dir:
-                # extract into `base_dir` if there is no common top-most directory inside the archive
-                base_dir = self.file_path.stem.rstrip('.tar')
-                destination = destination/base_dir
-                extracted_dir = destination
-            log.info(f'extracting {self.file_path} ...')
-            tar.extractall(path=destination)
-        log.info(f'extracted {self.file_path} to {extracted_dir}')
+        with RICH_CONSOLE.status(f"extracting [green]'{self.file_path}'[/]", spinner='point') as status:
+            with tarfile.open(name=self.file_path, mode='r:*') as tar:
+                base_dir = os.path.commonpath(tar.getnames()) # [With Python's 'tarfile', how can I get the top-most directory in a tar archive?](https://stackoverflow.com/a/11269228)
+                extracted_dir = destination/base_dir
+                if not base_dir:
+                    # extract into `base_dir` if there is no common top-most directory inside the archive
+                    base_dir = self.file_path.stem.rstrip('.tar')
+                    destination = destination/base_dir
+                    extracted_dir = destination
+                tar.extractall(path=destination)
+        log.info(f'extracted {self.file_path}\nto {extracted_dir}')
         return extracted_dir
 
     @staticmethod
@@ -366,17 +384,17 @@ class Asset:
             pathlib.Path(extracted_path).chmod(mode=unix_attributes)
 
     def extractZIP(self, destination: pathlib.Path = cfg.data_dir) -> pathlib.Path:
-        with zipfile.ZipFile(self.file_path, mode='r') as zip:
-            base_dir = os.path.commonpath(zip.namelist()) # [With Python's 'tarfile', how can I get the top-most directory in a tar archive?](https://stackoverflow.com/a/11269228)
-            extracted_dir = destination/base_dir
-            if not base_dir:
-                # extract into `base_dir` if there is no common top-most directory inside the archive
-                base_dir = self.file_path.stem.rstrip('.tar')
-                destination = destination/base_dir
-                extracted_dir = destination
-            log.info(f'extracting {self.file_path} ...')
-            self.zipfile_extract_all_preserve_permissions(zip=zip, destination=destination) # zip.extractall(path=destination)
-        log.info(f'extracted {self.file_path} to {extracted_dir}')
+        with RICH_CONSOLE.status(f"extracting [green]'{self.file_path}'[/]", spinner='point') as status:
+            with zipfile.ZipFile(self.file_path, mode='r') as zip:
+                base_dir = os.path.commonpath(zip.namelist()) # [With Python's 'tarfile', how can I get the top-most directory in a tar archive?](https://stackoverflow.com/a/11269228)
+                extracted_dir = destination/base_dir
+                if not base_dir:
+                    # extract into `base_dir` if there is no common top-most directory inside the archive
+                    base_dir = self.file_path.stem.rstrip('.tar')
+                    destination = destination/base_dir
+                    extracted_dir = destination
+                self.zipfile_extract_all_preserve_permissions(zip=zip, destination=destination) # zip.extractall(path=destination)
+        log.info(f'extracted {self.file_path}\nto {extracted_dir}')
         return extracted_dir
 
 
@@ -415,9 +433,9 @@ class Checksum:
             with file_path.open(mode='rb') as target_file:
                 download_checksum = hashlib.sha256(target_file.read()).hexdigest()
             log.debug(f'{reference_checksum = }\n{download_checksum  = }')
-            log.info(f'reference_checksum == download_checksum: {reference_checksum == download_checksum}')
             if reference_checksum != download_checksum:
                 raise ValueError("checksums don't match!")
+            log.info(f"checksums match! ('{download_checksum}')")
 
 
 @dataclasses.dataclass
@@ -436,18 +454,18 @@ class Executables:
     def identify(cls, extracted_path: pathlib.Path, bin_pattern: re.Pattern = '.*') -> typing.List[pathlib.Path]:
         '''Identify executable or binary files in `extracted_path`.'''
         if cls.isExecutableFile(extracted_path):
-            log.debug(f'{extracted_path = }')
+            log.debug(f'executable: {extracted_path}')
             return [extracted_path]
         executables = [f for f in extracted_path.rglob('*') if cls.isExecutableFile(f) and re.search(pattern=bin_pattern, string=str(f))]
         if len(executables) == 1:
-            log.debug(f'{executables = }')
+            log.debug(f'executable: {executables[0]}')
             return executables
         bin_dir_executables = [f for f in executables if f.parent.stem == 'bin'] # look inside `bin` directory
         base_dir_executables = [f for f in executables if f.parent == extracted_path] # look inside root directory
         executables = bin_dir_executables if bin_dir_executables else base_dir_executables if base_dir_executables else []
         if not executables:
             log.warning(f'no binaries found in {extracted_path}')
-        log.debug(f'{executables = }')
+        log.debug(f'executables: {[str(e) for e in executables]}')
         return executables
 
     @staticmethod
@@ -455,7 +473,7 @@ class Executables:
         '''Create (and overwrite) a symbolic link at `symlink` that points to `target` if `target` is a file.'''
         if target.is_file():
             symlink.unlink(missing_ok=True)
-            log.debug(f'{symlink} -> {target}')
+            log.debug(f"{symlink} -> '{target}'")
             symlink.symlink_to(target=target)
 
     def symlink(self, symlink_alias: str = None, bin_dir: pathlib.Path = cfg.bin_dir) -> typing.List[pathlib.Path]:
@@ -469,7 +487,7 @@ class Executables:
         else:
             _ = [self.link(target=binary, symlink=bin_dir/binary.name) for binary in self.extracted_bin]
             symlinks = [bin_dir/binary.name for binary in self.extracted_bin]
-        log.info(f'{symlinks = }')
+        log.info(f'symlinks: {[str(s) for s in symlinks]}')
         return symlinks
 
 
@@ -518,8 +536,8 @@ class Help:
     '''Help text for CLI arguments and options.'''
 
     log_level = f"log level {[l.lower() for l in logging._nameToLevel if l != 'NOTSET']}"
-    github_token = 'token to increase the rate limit of GitHub API calls (can also be set as an environment variable: `GITHUB_TOKEN`)'
-    gitlab_token = 'token to increase the rate limit of GitLab API calls (can also be set as an environment variable: `GITLAB_TOKEN`)'
+    github_token = 'token to increase the rate limit of GitHub API calls (can also be set as an environment variable: "GITHUB_TOKEN")'
+    gitlab_token = 'token to increase the rate limit of GitLab API calls (can also be set as an environment variable: "GITLAB_TOKEN")'
     bin_dir = 'symlink destination directory'
     cache_dir = 'download directory'
     data_dir = 'extracted data directory'
@@ -567,16 +585,22 @@ class Typer:
 
 
 @app.command()
-def config(log_level: Typer.log_level = logging.getLevelName(Config.log_level).lower(),
-           github_token: Typer.github_token = Config.github_token,
-           gitlab_token: Typer.gitlab_token = Config.gitlab_token,
-           bin_dir: Typer.bin_dir = Config.bin_dir,
-           cache_dir: Typer.cache_dir = Config.cache_dir,
-           data_dir: Typer.data_dir = Config.data_dir,
-           metadata_dir: Typer.metadata_dir = Config.metadata_dir):
+def config(log_level: Typer.log_level = DEFAULT_CONFIG['log_level'],
+           github_token: Typer.github_token = DEFAULT_CONFIG['github_token'],
+           gitlab_token: Typer.gitlab_token = DEFAULT_CONFIG['gitlab_token'],
+           bin_dir: Typer.bin_dir = DEFAULT_CONFIG['bin_dir'],
+           cache_dir: Typer.cache_dir = DEFAULT_CONFIG['cache_dir'],
+           data_dir: Typer.data_dir = DEFAULT_CONFIG['data_dir'],
+           metadata_dir: Typer.metadata_dir = DEFAULT_CONFIG['metadata_dir']):
     '''Write config options to file.'''
     kwargs = locals()
-    kwargs['log_level'] = logging.getLevelName(log_level.upper()) # logging._nameToLevel.get(log_level.upper())
+    log_level = kwargs.pop('log_level')
+    if str(log_level).upper() in logging._nameToLevel:
+        kwargs['log_level'] = logging.getLevelName(log_level.upper())
+    elif log_level in logging._levelToName:
+        kwargs['log_level'] = log_level
+    else:
+        log.warning(f"'{log_level}' is not a valid log_level and will be ignored")
     kwargs.update({k: pathlib.Path(v) for k, v in kwargs.items() if k.endswith('_dir')}) # convert paths to `pathlib.Path` objects
     Config(**kwargs).write()
 
@@ -637,14 +661,14 @@ def install(repo_id: Typer.repo_id,
     asset_urls = assetURL(tag_info=tag_info, tag=tag)
     if not url:
         if tag_info.empty:
-            return log.error(f'`{tag}` tag not found')
+            return log.error(f"'{tag}' tag not found")
         if asset_urls.empty:
-            return log.error(f'no assets corresponding to `{tag}` tag found')
+            return log.error(f"no assets corresponding to '{tag}' tag found")
         url = Asset.identify(asset_urls=asset_urls, asset_pattern=asset_pattern)
     if not url:
         return log.error('no release assets found or provided! :(')
     tag_date = pandas.Timestamp(tag_info.get('published_at', tag_info.get('released_at')))
-    if (not confirm) and (input(f'proceed with installation of `{tag}` tag ({tag_date})? ').lower() not in ('y', 'yes', 'yep')):
+    if (not confirm) and (not rich.prompt.Confirm.ask(f"proceed with installation of [green]'{tag}'[/] tag ([green]{tag_date}[/])?")):
         return
     asset_url, asset_filename = url, url.split('/')[-1]
     file_path = cfg.cache_dir/asset_filename
@@ -656,6 +680,8 @@ def install(repo_id: Typer.repo_id,
     install_meta = extractAndSymlink(repo=repo, file_path=file_path, bin_pattern=bin_pattern, symlink_alias=symlink_alias)
     metadata = dict(repo=repo_info.to_dict(), tag=tag_info.to_dict() if not tag_info.empty else {'tag_name': url}, meta={**kwargs, **download_meta, **install_meta})
     Meta().write(metadata=metadata)
+    if log.level <= logging.INFO:
+        RICH_CONSOLE.rule(title=f"installed '{repo.id}'")
 
 
 @app.command('update')
@@ -673,11 +699,11 @@ def upgrade(repo_id: Typer.repo_id, confirm: Typer.confirm = False, quiet: Typer
         return
     latest_tag_date = pandas.Timestamp(latest_tag.get('published_at', latest_tag.get('released_at')))
     if installed_tag_date >= latest_tag_date:
-        log.info(f'{repo.id} installed tag `{installed_tag}` ({installed_tag_date}) is up to date')
+        log.info(f"'{repo.id}' installed tag '{installed_tag}' ({installed_tag_date}) is up to date")
         return
     kwarg_tag = metadata.get('meta', {}).get('tag')
-    log.info(f"updating {repo.id} from `{installed_tag}` ({installed_tag_date}) to `{latest_tag.get('tag_name')}` ({latest_tag_date})")
-    if (kwarg_tag != 'latest') and (input(f'upgrade from `{kwarg_tag}` tag to `latest` tag? ').lower() not in ('y', 'yes', 'yep')):
+    log.warning(f'''will update '{repo.id}' from '{installed_tag}' ({installed_tag_date}) to '{latest_tag.get("tag_name")}' ({latest_tag_date})''')
+    if (kwarg_tag != 'latest') and (not rich.prompt.Confirm.ask(f"upgrade from [green]'{kwarg_tag}'[/] tag to [green]'latest'[/] tag?")):
         return
     uninstall(repo_id=repo.id, confirm=confirm)
     metadata = metadata if metadata else {'meta': {'repo_id': repo.id}}
@@ -707,14 +733,16 @@ def uninstall(repo_id: Typer.repo_id, confirm: Typer.confirm = False, quiet: Typ
     metadata = Meta().read(repo_id=repo.id).get('meta')
     meta_filepath = cfg.metadata_dir/f"{repo.id.replace('/', '_')}.json"
     if not metadata:
-        return log.warning(f'`{repo.id}` does not seem to be installed. Please check if metadata file exists in `{meta_filepath}`')
-    log.info(f"the following symlinks/files/directories will be deleted:\n{str.join(', ', metadata.get('symlinks'))}\n{metadata.get('asset')}\n{metadata.get('extracted_path')}\n{meta_filepath}")
-    if (not confirm) and (input('proceed with uninstallation? ').lower() not in ('y', 'yes', 'yep')):
+        return log.warning(f"'{repo.id}' does not seem to be installed. Please check if metadata file exists in '{meta_filepath}'")
+    log.warning(f"the following symlinks/files/directories will be deleted:\n{str.join(', ', metadata.get('symlinks'))}\n{metadata.get('asset')}\n{metadata.get('extracted_path')}\n{meta_filepath}")
+    if (not confirm) and (not rich.prompt.Confirm.ask('proceed with uninstallation?')):
         return
     _ = [rmRecursive(path=pathlib.Path(path)) for path in metadata.get('symlinks')]
     rmRecursive(path=pathlib.Path(metadata.get('asset')))
     rmRecursive(path=pathlib.Path(metadata.get('extracted_path')))
     meta_filepath.unlink(missing_ok=True)
+    if log.level <= logging.INFO:
+        RICH_CONSOLE.rule(title=f"uninstalled '{repo.id}'")
 
 
 def parseVersion(version: str) -> packaging.version.Version:
@@ -776,7 +804,7 @@ def installAll():
         'cli/cli': {},
         'wagoodman/dive': {},
         'wader/fq': {},
-        'antonmedv/fx': {},
+        'antonmedv/fx': dict(tag='32.0.0'),
         'junegunn/fzf': {},
         'dundee/gdu': dict(asset_pattern='linux_amd64.tgz'),
         'tomnomnom/gron': {},
@@ -792,7 +820,7 @@ def installAll():
     rust = {
         'sharkdp/bat': dict(asset_pattern='linux-gnu.tar.gz'),
         'ClementTsang/bottom': dict(tag='prerelease', asset_pattern='linux-gnu.tar.gz'),
-        'Canop/broot': {},
+        'Canop/broot': dict(asset_patter='linux-gnu'),
         'bootandy/dust': dict(asset_pattern='linux-gnu.tar.gz'),
         'eza-community/eza': dict(asset_pattern='linux-gnu.tar.gz'),
         'sharkdp/fd': dict(asset_pattern='linux-gnu.tar.gz'),
