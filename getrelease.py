@@ -240,7 +240,7 @@ class Repo:
 
     def parseID(self) -> str:
         '''Parse org and repo from `repo_id`'''
-        match = re.match(pattern='(?:https?://)?(?:git[hl][au]b.com)?/?(\w+/\w+)', string=self.id)
+        match = re.match(pattern='(?:https?://)?(?:git[hl][au]b.com)?/?([a-zA-Z0-9_-]+/[\.a-zA-Z0-9_-]+)', string=self.id) # [Rules for special characters in github repository name?](https://stackoverflow.com/a/59082561/13019084)
         if not match:
             raise ValueError("please provide github.com/gitlab.com repo url or organization & repo separated by a slash, e.g. 'https://github.com/junegunn/fzf' or 'junegunn/fzf'")
         return match.group(1)
