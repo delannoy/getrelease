@@ -54,7 +54,7 @@ XDG_DATA_HOME = pathlib.Path(f"{os.getenv('XDG_DATA_HOME', pathlib.Path.home()/'
 class Config:
     '''Configuration options.'''
 
-    log_level: int = logging.INFO
+    log_level: int = logging.INFO # logging.INFO == 20
     github_token: str = os.getenv('GITHUB_TOKEN', '')
     gitlab_token: str = os.getenv('GITLAB_TOKEN', '')
     bin_dir: pathlib.Path = XDG_DATA_HOME.parent/'bin' # symlink destination directory
@@ -70,7 +70,9 @@ class Config:
         '''Read configuration options from config file and overwrite them with any options provided when instantiating the class.'''
         with self.file.open(mode='r') as config_file:
             config = json.load(fp=config_file)
-        config.update(dataclasses.asdict(self)) # update attributes from file with instantiated attributes
+        instantiated_attributes = {f.name: getattr(self, f.name) for f in dataclasses.fields(self) if getattr(self, f.name) != f.default} # get instantiated attributes that differ from default attributes
+        config.update(instantiated_attributes) # update attributes read from config file with instantiated attributes
+        config.update({k: pathlib.Path(v) for k, v in config.items() if k.endswith('_dir')}) # convert paths to `pathlib.Path` objects
         _ = {setattr(self, k, v) for k, v in config.items()} # [Creating class instance properties from a dictionary?](https://stackoverflow.com/a/1639197)
 
     def write(self):
@@ -575,7 +577,7 @@ def config(log_level: Typer.log_level = logging.getLevelName(Config.log_level).l
     '''Write config options to file.'''
     kwargs = locals()
     kwargs['log_level'] = logging.getLevelName(log_level.upper()) # logging._nameToLevel.get(log_level.upper())
-    kwargs.update({k: pathlib.Path(v) for k, v in kwargs.items() if isinstance(v, str) or k.endswith('_token')}) # convert paths to `pathlib.Path` objects
+    kwargs.update({k: pathlib.Path(v) for k, v in kwargs.items() if k.endswith('_dir')}) # convert paths to `pathlib.Path` objects
     Config(**kwargs).write()
 
 
